@@ -6,3 +6,4 @@ pydantic
 python-multipart==0.0.20
 python-magic==0.4.27
 python-dotenv
+tenacity
