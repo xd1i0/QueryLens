@@ -9,7 +9,10 @@ class Doc(BaseModel):
     tags: Optional[List[str]] = Field(default_factory=list)
     file_type: Optional[str] = None
     original_filename: Optional[str] = None
-    #author: Optional[str] = None
-    #timestamp: Optional[datetime] = None
-    #data_source_url: Optional[str] = None
+    author: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+    source_system: Optional[str] = "ingestion-api"
+    file_size_bytes: Optional[int] = None
+    chunk_index: Optional[int] = None
+    parent_document_id: Optional[str] = None
 

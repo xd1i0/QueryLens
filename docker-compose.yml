@@ -36,6 +36,10 @@ services:
         condition: service_healthy
     environment:
       - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - ELASTICSEARCH_INDEX=docs
+      - ELASTICSEARCH_VERIFY_CERTS=false
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
     ports:
       - "8000:8000"
     restart: unless-stopped

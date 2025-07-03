@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     unrtf \
     poppler-utils \
     tesseract-ocr \
-    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY src/requirements.txt .
