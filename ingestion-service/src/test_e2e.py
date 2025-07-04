@@ -153,7 +153,7 @@ class TestEndToEnd:
 
         # Test non-existent document retrieval (should return 404)!!!!!
         response = api_client.get(f"{API_BASE_URL}/docs/non-existent")
-        assert response.status_code == 500
+        assert response.status_code == 404
 
         # Test invalid search parameters
         response = api_client.get(f"{API_BASE_URL}/search/?q=&size=0")
