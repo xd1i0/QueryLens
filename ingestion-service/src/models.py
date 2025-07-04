@@ -15,4 +15,3 @@ class Doc(BaseModel):
     file_size_bytes: Optional[int] = None
     chunk_index: Optional[int] = None
     parent_document_id: Optional[str] = None
-

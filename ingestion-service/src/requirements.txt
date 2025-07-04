@@ -1,9 +1,16 @@
 fastapi
 uvicorn[standard]
-textract==1.6.5
+textract==1.6.3
 elasticsearch>=8.0.0, <9.0.0
 pydantic
 python-multipart==0.0.20
 python-magic==0.4.27
 python-dotenv
 tenacity
+pytest
+pytest-asyncio
+httpx
+pytest-mock
+elasticsearch-dsl
+libmagic
+prometheus-client

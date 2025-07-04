@@ -1,0 +1,195 @@
+{
+  "id": null,
+  "title": "QueryLens Ingestion Service",
+  "tags": ["querylens"],
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP Requests Rate",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total[5m])",
+          "legendFormat": "{{method}} {{endpoint}} ({{status_code}})",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Requests/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "HTTP Response Times",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "95th percentile",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "50th percentile",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(http_request_duration_seconds_sum[5m]) / rate(http_request_duration_seconds_count[5m])",
+          "legendFormat": "Average",
+          "refId": "C"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Seconds",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "id": 3,
+      "title": "Elasticsearch Operations",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(elasticsearch_operations_total[5m])",
+          "legendFormat": "{{operation}} ({{status}})",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Operations/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+    },
+    {
+      "id": 4,
+      "title": "Documents Indexed",
+      "type": "singlestat",
+      "targets": [
+        {
+          "expr": "sum(documents_indexed_total)",
+          "legendFormat": "Total Documents",
+          "refId": "A"
+        }
+      ],
+      "valueName": "current",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+    },
+    {
+      "id": 5,
+      "title": "Elasticsearch Connection Status",
+      "type": "singlestat",
+      "targets": [
+        {
+          "expr": "elasticsearch_connection_status",
+          "legendFormat": "Connection Status",
+          "refId": "A"
+        }
+      ],
+      "valueMaps": [
+        {
+          "value": "1",
+          "text": "Connected"
+        },
+        {
+          "value": "0",
+          "text": "Disconnected"
+        }
+      ],
+      "colorBackground": true,
+      "thresholds": "0,1",
+      "colors": ["#d44a3a", "#299c46", "#299c46"],
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16}
+    },
+    {
+      "id": 6,
+      "title": "File Uploads",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(file_uploads_total[5m])",
+          "legendFormat": "{{file_type}} ({{status}})",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Uploads/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 6, "y": 16}
+    },
+    {
+      "id": 7,
+      "title": "Search Requests",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(search_requests_total[5m])",
+          "legendFormat": "Search (grouped={{grouped}})",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Searches/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+    },
+    {
+      "id": 8,
+      "title": "Elasticsearch Errors",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(elasticsearch_errors_total[5m])",
+          "legendFormat": "{{error_type}} - {{operation}}",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Errors/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "5s"
+}
