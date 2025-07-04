@@ -541,6 +541,14 @@ def group_chunk_results(hits: List[dict], limit: int) -> List[dict]:
         source = hit["_source"]
         parent_id = source.get("parent_document_id")
 
+        # If parent_document_id is not set, try to extract from tags
+        if not parent_id:
+            tags = source.get("tags", [])
+            for tag in tags:
+                if tag.startswith("parent:"):
+                    parent_id = tag.split("parent:", 1)[1]
+                    break
+
         if parent_id:
             # This is a chunk
             if parent_id not in grouped:
