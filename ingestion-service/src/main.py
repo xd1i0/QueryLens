@@ -112,7 +112,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 )
 def es_operation_with_retry(operation, *args, **kwargs):
     """Execute Elasticsearch operation with retry logic and metrics"""
-    operation_name = operation.__name__
+    operation_name = getattr(operation, '__name__', repr(operation))
     start_time = time.time()
 
     try:
