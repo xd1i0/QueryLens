@@ -116,6 +116,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install docker-compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
+
       - name: Test Docker build
         run: |
           cd ingestion-service
