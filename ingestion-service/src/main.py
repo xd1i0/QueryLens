@@ -121,15 +121,17 @@ def es_operation_with_retry(operation, *args, **kwargs):
         record_es_operation(operation_name, duration, "success")
         return result
 
-    except (NotFoundError, TransportError) as e:
+    except NotFoundError as e:
+        # Don't retry on 404 errors - they're not transient
         duration = time.time() - start_time
+        record_es_operation(operation_name, duration, "not_found")
+        record_es_error("not_found", operation_name)
+        raise e
 
-        if hasattr(e, 'status_code') and e.status_code == 404:
-            record_es_operation(operation_name, duration, "not_found")
-            record_es_error("not_found", operation_name)
-        else:
-            record_es_operation(operation_name, duration, "error")
-            record_es_error("transport_error", operation_name)
+    except TransportError as e:
+        duration = time.time() - start_time
+        record_es_operation(operation_name, duration, "error")
+        record_es_error("transport_error", operation_name)
         raise e
 
     except ConnectionError as e:
@@ -339,8 +341,6 @@ async def get_doc(doc_id: str):
     except ConnectionError:
         raise HTTPException(status_code=503, detail="Elasticsearch service unavailable")
     except TransportError as e:
-        if e.status_code == 404:
-            raise HTTPException(status_code=404, detail=f"Document with ID '{doc_id}' not found")
         logger.error(f"Elasticsearch transport error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve document")
     except Exception as e:
@@ -551,14 +551,22 @@ def group_chunk_results(hits: List[dict], limit: int) -> List[dict]:
                     "tags": [tag for tag in source.get("tags", []) if
                              not tag.startswith("chunk") and not tag.startswith("parent:")],
                     "score": hit["_score"],
-                    "chunks": 1
+                    "chunks": 1,
+                    "file_type": source.get("file_type"),
+                    "original_filename": source.get("original_filename"),
+                    "author": source.get("author"),
+                    "source_system": source.get("source_system"),
+                    "timestamp": source.get("timestamp")
                 }
+                if "highlight" in hit:
+                    grouped[parent_id]["highlight"] = hit["highlight"]
             else:
-                # Combine content from multiple chunks
-                grouped[parent_id]["content"] += "\n\n" + source["content"]
-                grouped[parent_id]["chunks"] += 1
+                # For additional chunks of the same document, only update if score is higher
                 if hit["_score"] > grouped[parent_id]["score"]:
                     grouped[parent_id]["score"] = hit["_score"]
+                    if "highlight" in hit:
+                        grouped[parent_id]["highlight"] = hit["highlight"]
+                grouped[parent_id]["chunks"] += 1
         else:
             # This is a regular document
             result = {
