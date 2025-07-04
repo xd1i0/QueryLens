@@ -3,10 +3,12 @@ name: Test Ingestion Service
 on:
   push:
     branches:
-      - [main, develop]
+      - main
+      - develop
   pull_request:
     branches:
-      - [main, develop]
+      - main
+      - develop
 
 jobs:
   test:
