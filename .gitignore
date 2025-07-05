@@ -11,3 +11,15 @@ __pycache__/
 env/
 venv/
 ENV/
+
+# Elasticsearch certificates (for MVP - normally you'd exclude these)
+# For MVP purposes, we'll include self-signed certs in the repo
+# TODO: Remove when moving to proper PKI/Vault setup
+# certs/
+
+# Environment variables
+.env.local
+.env.production
+
+# Elasticsearch data
+esdata/

@@ -1,5 +1,6 @@
 import os
 import time
+import ssl
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch, ConnectionError, TransportError, NotFoundError
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
@@ -34,9 +35,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ES_HOST = os.getenv("ELASTICSEARCH_HOST", "http://localhost:9200")
-ES_USERERNAME = os.getenv("ELASTICSEARCH_USERNAME")
-ES_PASSWORD = os.getenv("ELASTICSEARCH_PASSWORD")
-ES_VERIFY_CERTS = os.getenv("ELASTICSEARCH_VERIFY_CERTS", "false").lower() in ["true", "1"]
+ES_USERNAME = os.getenv("ELASTICSEARCH_USERNAME", "elastic")
+ES_PASSWORD = os.getenv("ELASTICSEARCH_PASSWORD", "changeme123!")
+ES_VERIFY_CERTS = os.getenv("ELASTICSEARCH_VERIFY_CERTS", "true").lower() in ["true", "1"]
+ES_CA_PATH = os.getenv("ELASTICSEARCH_CA_PATH", "/app/certs/ca/ca.crt")
+ES_DISABLE_SSL_VERIFICATION = os.getenv("ELASTICSEARCH_DISABLE_SSL_VERIFICATION", "false").lower() in ["true", "1"]
 INDEX = os.getenv("ELASTICSEARCH_INDEX", "docs")
 
 APP_TITLE = os.getenv("APP_TITLE", "QueryLens Ingestion & Search")
@@ -44,20 +47,105 @@ CHUNK_MAX_TOKENS = int(os.getenv("CHUNK_MAX_TOKENS", "250"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 CHUNK_THRESHOLD_WORDS = int(os.getenv("CHUNK_THRESHOLD_WORDS", "500"))
 
+
+def create_ssl_context():
+    """Create SSL context for Elasticsearch connection with enhanced security handling"""
+    if not ES_HOST.startswith("https://"):
+        logger.info("Using HTTP connection (no SSL)")
+        return None
+
+    context = ssl.create_default_context()
+
+    # If SSL verification is explicitly disabled (for development/testing)
+    if ES_DISABLE_SSL_VERIFICATION:
+        logger.warning("SSL certificate verification is DISABLED - this should only be used in development!")
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+
+    # Try to use provided CA certificate first
+    if ES_VERIFY_CERTS:
+        if os.path.exists(ES_CA_PATH):
+            try:
+                context.load_verify_locations(ES_CA_PATH)
+                logger.info(f"Using CA certificate from: {ES_CA_PATH}")
+                return context
+            except ssl.SSLError as e:
+                logger.error(f"Failed to load CA certificate from {ES_CA_PATH}: {e}")
+        else:
+            logger.warning(f"CA certificate not found at {ES_CA_PATH}")
+
+        # Try to use system CA store
+        try:
+            context.load_default_certs()
+            logger.info("Using system CA certificate store")
+            return context
+        except ssl.SSLError as e:
+            logger.error(f"Failed to load system CA certificates: {e}")
+
+        # If all else fails, warn and disable verification
+        logger.warning("Cannot verify SSL certificates - disabling SSL verification for connection")
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    else:
+        logger.info("SSL certificate verification disabled by configuration")
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    return context
+
+
+# Enhanced Elasticsearch configuration
 es_config = {
     "hosts": [ES_HOST],
-    "verify_certs": ES_VERIFY_CERTS,
-    "timeout": 30,
+    "request_timeout": 30,  # Updated from deprecated 'timeout'
     "max_retries": 3,
     "retry_on_timeout": True,
+    "sniff_on_start": False,  # Disable sniffing for containerized environments
+    "sniff_on_node_failure": False,  # Updated from deprecated 'sniff_on_connection_fail'
 }
 
-if ES_USERERNAME and ES_PASSWORD:
-    es_config["basic_auth"] = (ES_USERERNAME, ES_PASSWORD)
+# Add authentication if credentials are provided
+if ES_USERNAME and ES_PASSWORD:
+    es_config["basic_auth"] = (ES_USERNAME, ES_PASSWORD)
+    logger.info(f"Using basic authentication with user: {ES_USERNAME}")
+
+# Add SSL configuration for HTTPS
+if ES_HOST.startswith("https://"):
+    ssl_context = create_ssl_context()
+    if ssl_context:
+        es_config["ssl_context"] = ssl_context
+
+    # Set verify_certs based on our security configuration
+    if ES_DISABLE_SSL_VERIFICATION:
+        es_config["verify_certs"] = False
+        logger.warning("SSL certificate verification disabled")
+    else:
+        es_config["verify_certs"] = ES_VERIFY_CERTS
+        logger.info(f"SSL certificate verification: {'enabled' if ES_VERIFY_CERTS else 'disabled'}")
 
 es = Elasticsearch(**es_config)
 
-app = FastAPI(title=APP_TITLE)
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting up application...")
+
+    if not wait_for_es():
+        logger.warning(f"Could not connect to Elasticsearch at {ES_HOST}")
+        raise RuntimeError("Elasticsearch connection failed")
+    else:
+        create_index_mapping()
+    logger.info("Application startup complete")
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down application...")
+
+app = FastAPI(title=APP_TITLE, lifespan=lifespan)
 
 # Add Prometheus middleware
 app.add_middleware(PrometheusMiddleware)
@@ -145,18 +233,25 @@ def es_operation_with_retry(operation, *args, **kwargs):
 
 
 def wait_for_es(max_retries=30, delay=2):
-    """Wait for Elasticsearch to be ready"""
+    """Wait for Elasticsearch to be ready with enhanced error handling"""
     for i in range(max_retries):
         try:
             if es.ping():
-                logger.info(f"Connected to Elasticsearch at {ES_HOST}")
+                logger.info(f"Successfully connected to Elasticsearch at {ES_HOST}")
                 update_es_connection_status(True)
                 return True
         except Exception as e:
-            logger.info(f"Attempt {i + 1}: Waiting for Elasticsearch... ({e})")
+            error_msg = str(e)
+            if "certificate verify failed" in error_msg or "TLS error" in error_msg:
+                logger.error(f"SSL/TLS certificate verification failed: {error_msg}")
+                logger.error("Consider setting ELASTICSEARCH_DISABLE_SSL_VERIFICATION=true for development")
+                logger.error("Or provide a valid CA certificate path with ELASTICSEARCH_CA_PATH")
+            else:
+                logger.info(f"Attempt {i + 1}: Waiting for Elasticsearch... ({error_msg})")
             update_es_connection_status(False)
             time.sleep(delay)
 
+    logger.error(f"Failed to connect to Elasticsearch after {max_retries} attempts")
     update_es_connection_status(False)
     return False
 
@@ -269,19 +364,6 @@ def create_index_mapping():
         logger.error(f"Error creating index mapping: {e}")
         raise
 
-
-@app.on_event("startup")
-async def startup():
-    logger.info("Starting up application...")
-
-    if not wait_for_es():
-        logger.warning(f"Could not connect to Elasticsearch at {ES_HOST}")
-        raise RuntimeError("Elasticsearch connection failed")
-    else:
-        create_index_mapping()
-    logger.info("Application startup complete")
-
-
 @app.get("/metrics")
 async def get_metrics():
     """Prometheus metrics endpoint"""
@@ -291,15 +373,33 @@ async def get_metrics():
 @app.get("/")
 def root():
     try:
+        # Test both ping and authentication
         es_healthy = es.ping()
-        es_status = "connected" if es_healthy else "disconnected"
+        if es_healthy:
+            # Verify we can actually perform operations
+            cluster_health = es.cluster.health()
+            es_status = f"connected ({cluster_health['status']})"
+        else:
+            es_status = "disconnected"
         update_es_connection_status(es_healthy)
-    except Exception:
-        es_status = "error"
+    except Exception as e:
+        error_msg = str(e)
+        if "certificate verify failed" in error_msg or "TLS error" in error_msg:
+            logger.error(f"SSL/TLS certificate verification failed: {error_msg}")
+            es_status = "ssl_error: certificate verification failed"
+        else:
+            logger.error(f"Elasticsearch connection error: {error_msg}")
+            es_status = f"error: {error_msg}"
         update_es_connection_status(False)
 
-    return {"status": "ok", "elasticsearch": ES_HOST, "elasticsearch_status": es_status}
-
+    return {
+        "status": "ok",
+        "elasticsearch": ES_HOST,
+        "elasticsearch_status": es_status,
+        "security_enabled": ES_HOST.startswith("https://"),
+        "cert_verification": ES_VERIFY_CERTS and not ES_DISABLE_SSL_VERIFICATION,
+        "ssl_verification_disabled": ES_DISABLE_SSL_VERIFICATION
+    }
 
 @app.post("/docs/", status_code=201)
 async def index_doc(doc: Doc):

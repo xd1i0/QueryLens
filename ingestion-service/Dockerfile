@@ -1,6 +1,5 @@
 FROM python:3.10-slim
 
-# Install Java (required for Tika)
 RUN apt-get update && apt-get install -y \
     libmagic1 \
     libmagic-dev \
@@ -16,6 +15,8 @@ COPY src/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./
+
+RUN mkdir -p /app/certs
 
 ENV PYTHONPATH=/app
 

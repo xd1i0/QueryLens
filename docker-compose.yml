@@ -1,32 +1,33 @@
-version: '3.8'
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.8.2
     container_name: qlens-es
     environment:
       - discovery.type=single-node
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
-      - xpack.security.enabled=false
-      - xpack.security.http.ssl.enabled=false
-      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD=changeme123!
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.transport.ssl.enabled=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./certs:/usr/share/elasticsearch/config/certs:ro
+      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - esdata:/usr/share/elasticsearch/data
     ports:
       - "9200:9200"
+      - "9300:9300"
+    networks:
+      - querylens-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "curl -k -u elastic:changeme123! https://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 5
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.8.2
-    container_name: qlens-kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
 
   ingestion:
     build: ./ingestion-service
@@ -35,13 +36,20 @@ services:
       elasticsearch:
         condition: service_healthy
     environment:
-      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - ELASTICSEARCH_HOST=https://elasticsearch:9200
       - ELASTICSEARCH_INDEX=docs
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=changeme123!
       - ELASTICSEARCH_VERIFY_CERTS=false
+      - ELASTICSEARCH_CA_PATH=/app/certs/ca/ca.crt
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
+    volumes:
+      - ./certs:/app/certs:ro
     ports:
       - "8000:8000"
+    networks:
+      - querylens-network
     restart: unless-stopped
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://localhost:8000/ || exit 1" ]
@@ -57,6 +65,8 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
+    networks:
+      - querylens-network
     depends_on:
       - ingestion
 
@@ -70,5 +80,15 @@ services:
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - querylens-network
     depends_on:
       - prometheus
+
+volumes:
+  esdata:
+    driver: local
+
+networks:
+  querylens-network:
+    driver: bridge

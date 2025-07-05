@@ -1,13 +1,87 @@
 import pytest
+import ssl
+import os
 from unittest.mock import Mock, patch, MagicMock
 from fastapi import HTTPException
 from main import (
     extract_text_from_file, chunk_text, should_chunk_document,
-    create_index_mapping, es_operation_with_retry, wait_for_es
+    create_index_mapping, es_operation_with_retry, wait_for_es,
+    create_ssl_context
 )
 from models import Doc
 import tempfile
-import os
+
+class TestSecurityConfiguration:
+    @patch('main.ES_HOST', 'http://localhost:9200')
+    def test_create_ssl_context_http(self):
+        """Test SSL context creation for HTTP connection"""
+        context = create_ssl_context()
+        assert context is None
+
+    @patch('main.ES_HOST', 'https://localhost:9200')
+    @patch('main.ES_DISABLE_SSL_VERIFICATION', True)
+    def test_create_ssl_context_disabled_verification(self):
+        """Test SSL context with disabled verification"""
+        context = create_ssl_context()
+        assert context is not None
+        assert context.check_hostname is False
+        assert context.verify_mode == ssl.CERT_NONE
+
+    @patch('main.ES_HOST', 'https://localhost:9200')
+    @patch('main.ES_VERIFY_CERTS', False)
+    @patch('main.ES_DISABLE_SSL_VERIFICATION', False)
+    def test_create_ssl_context_no_verification(self):
+        """Test SSL context with certificate verification disabled"""
+        context = create_ssl_context()
+        assert context is not None
+        assert context.check_hostname is False
+        assert context.verify_mode == ssl.CERT_NONE
+
+    @patch('main.ES_HOST', 'https://localhost:9200')
+    @patch('main.ES_VERIFY_CERTS', True)
+    @patch('main.ES_DISABLE_SSL_VERIFICATION', False)
+    def test_create_ssl_context_with_ca_file(self, test_ca_cert):
+        """Test SSL context with CA certificate file"""
+        with patch('main.ES_CA_PATH', test_ca_cert):
+            with patch('ssl.SSLContext.load_verify_locations') as mock_load:
+                context = create_ssl_context()
+                assert context is not None
+                mock_load.assert_called_once_with(test_ca_cert)
+
+    @patch('main.ES_HOST', 'https://localhost:9200')
+    @patch('main.ES_VERIFY_CERTS', True)
+    @patch('main.ES_CA_PATH', '/nonexistent/ca.crt')
+    @patch('main.ES_DISABLE_SSL_VERIFICATION', False)
+    def test_create_ssl_context_missing_ca_file(self):
+        """Test SSL context with missing CA certificate file"""
+        # Mock the SSLContext to track calls to load_default_certs
+        with patch('ssl.create_default_context') as mock_create_context:
+            mock_context = Mock()
+            mock_create_context.return_value = mock_context
+
+            context = create_ssl_context()
+
+            assert context is not None
+            # Verify that load_default_certs was called on our mock context
+            mock_context.load_default_certs.assert_called_once()
+
+    @patch('main.ES_HOST', 'https://localhost:9200')
+    @patch('main.ES_VERIFY_CERTS', True)
+    @patch('main.ES_CA_PATH', '/nonexistent/ca.crt')
+    @patch('main.ES_DISABLE_SSL_VERIFICATION', False)
+    def test_create_ssl_context_fallback_to_disabled(self):
+        """Test SSL context fallback to disabled verification"""
+        # Mock the SSLContext to simulate failure in load_default_certs
+        with patch('ssl.create_default_context') as mock_create_context:
+            mock_context = Mock()
+            mock_context.load_default_certs.side_effect = ssl.SSLError("Failed")
+            mock_create_context.return_value = mock_context
+
+            context = create_ssl_context()
+
+            assert context is not None
+            assert context.check_hostname is False
+            assert context.verify_mode == ssl.CERT_NONE
 
 class TestTextExtraction:
     def test_extract_text_from_markdown(self):
@@ -130,6 +204,33 @@ class TestElasticsearchOperations:
         with pytest.raises(ConnectionError):
             es_operation_with_retry(mock_operation)
 
+    def test_es_operation_with_retry_not_found(self):
+        """Test ES operation with NotFoundError"""
+        from elasticsearch import NotFoundError
+
+        # Create proper NotFoundError with required arguments
+        meta = Mock()
+        meta.status = 404
+        body = {"error": {"type": "document_missing_exception", "reason": "Document not found"}}
+
+        mock_operation = Mock(side_effect=NotFoundError("Document not found", meta=meta, body=body))
+
+        with pytest.raises(NotFoundError):
+            es_operation_with_retry(mock_operation)
+
+    def test_es_operation_with_retry_transport_error(self):
+        """Test ES operation with TransportError"""
+        from elasticsearch import TransportError
+
+        # Create proper TransportError
+        transport_error = TransportError("Transport failed")
+        transport_error.status_code = 500
+
+        mock_operation = Mock(side_effect=transport_error)
+
+        with pytest.raises(TransportError):
+            es_operation_with_retry(mock_operation)
+
     @patch('main.es')
     def test_wait_for_es_success(self, mock_es):
         """Test successful ES connection"""
@@ -143,6 +244,15 @@ class TestElasticsearchOperations:
     def test_wait_for_es_failure(self, mock_es):
         """Test ES connection failure"""
         mock_es.ping.return_value = False
+
+        result = wait_for_es(max_retries=1, delay=0.1)
+
+        assert result == False
+
+    @patch('main.es')
+    def test_wait_for_es_ssl_error(self, mock_es):
+        """Test ES connection with SSL certificate error"""
+        mock_es.ping.side_effect = Exception("certificate verify failed")
 
         result = wait_for_es(max_retries=1, delay=0.1)
 
