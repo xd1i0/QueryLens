@@ -15,3 +15,7 @@ elasticsearch-dsl
 libmagic
 prometheus-client
 requests
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+pydantic[email]==2.5.0
+PyJWT==2.8.0

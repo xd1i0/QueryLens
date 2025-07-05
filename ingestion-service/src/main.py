@@ -1,11 +1,13 @@
 import os
+import sys
 import time
 import ssl
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch, ConnectionError, TransportError, NotFoundError
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from models import Doc
 import tempfile
 from typing import Optional, List
@@ -14,7 +16,167 @@ import textract
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from datetime import datetime
+from datetime import datetime, timedelta
+
+# Enhanced import path handling for auth module
+def setup_auth_imports():
+    """Setup import paths for auth module to work in both local and Docker environments"""
+    current_file = os.path.abspath(__file__)
+    current_dir = os.path.dirname(current_file)
+
+    # Debug information
+    print(f"Current file: {current_file}")
+    print(f"Current directory: {current_dir}")
+    print(f"Working directory: {os.getcwd()}")
+
+    # List contents of current directory and parent
+    try:
+        current_contents = os.listdir(current_dir)
+        print(f"Current directory contents: {current_contents}")
+    except Exception as e:
+        print(f"Cannot list current directory: {e}")
+
+    try:
+        parent_dir = os.path.dirname(current_dir)
+        parent_contents = os.listdir(parent_dir)
+        print(f"Parent directory: {parent_dir}")
+        print(f"Parent directory contents: {parent_contents}")
+    except Exception as e:
+        print(f"Cannot list parent directory: {e}")
+
+    # Try multiple possible locations for the auth module
+    possible_auth_locations = [
+        # Docker container structure: /app/auth (same level as main.py)
+        os.path.join(current_dir, 'auth'),
+        # Local development: parent of src directory
+        os.path.join(os.path.dirname(current_dir), 'auth'),
+        # Alternative: check if we're in a subdirectory
+        os.path.join(os.path.dirname(current_dir), 'auth'),
+    ]
+
+    auth_path = None
+    for path in possible_auth_locations:
+        print(f"Checking auth path: {path}")
+        if os.path.exists(path) and os.path.isdir(path):
+            auth_path = path
+            parent_path = os.path.dirname(path)
+            if parent_path not in sys.path:
+                sys.path.insert(0, parent_path)
+            print(f"Found auth module at: {path}")
+            print(f"Added to Python path: {parent_path}")
+            return True
+
+    # If auth module is not found, provide detailed error information
+    print("=" * 50)
+    print("AUTH MODULE NOT FOUND")
+    print("=" * 50)
+    print("This error indicates that the auth module is missing from the Docker container.")
+    print("This typically happens when the Docker build process doesn't copy the auth directory.")
+    print("")
+    print("To fix this, ensure your Dockerfile includes:")
+    print("COPY auth/ /app/auth/")
+    print("or")
+    print("COPY . /app/")
+    print("")
+    print("Searched locations:")
+    for path in possible_auth_locations:
+        print(f"  - {path} (exists: {os.path.exists(path)})")
+    print("=" * 50)
+
+    return False
+
+# Setup auth imports
+AUTH_ENABLED = setup_auth_imports()
+
+# Import authentication modules with fallback
+if AUTH_ENABLED:
+    try:
+        from auth.jwt_handler import (
+            authenticate_user, create_token_pair, refresh_access_token, revoke_token,
+            Token, User, UserCreate, RefreshTokenRequest,
+            JWT_ACCESS_TOKEN_EXPIRE_MINUTES, fake_users_db
+        )
+        from auth.dependencies import get_current_active_user, get_current_admin_user, rate_limit_dependency
+        from auth.security import SecurityHeadersMiddleware, log_security_event
+        print("Successfully imported auth modules")
+    except ImportError as e:
+        print(f"Failed to import auth modules: {e}")
+        AUTH_ENABLED = False
+
+if not AUTH_ENABLED:
+    print("Authentication disabled - auth module not found")
+
+    # Define minimal auth classes for fallback
+    class User:
+        def __init__(self, username="anonymous", **kwargs):
+            self.username = username
+            self.disabled = False
+            self.is_admin = False
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class Token:
+        def __init__(self, access_token="", refresh_token="", token_type="bearer", expires_in=0, refresh_expires_in=0):
+            self.access_token = access_token
+            self.refresh_token = refresh_token
+            self.token_type = token_type
+            self.expires_in = expires_in
+            self.refresh_expires_in = refresh_expires_in
+
+    class UserCreate:
+        def __init__(self, username="", email="", **kwargs):
+            self.username = username
+            self.email = email
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class RefreshTokenRequest:
+        def __init__(self, refresh_token=""):
+            self.refresh_token = refresh_token
+
+    # Fallback auth functions
+    def authenticate_user(username, password):
+        return None
+
+    def create_token_pair(user):
+        return Token()
+
+    def refresh_access_token(refresh_token):
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
+
+    def revoke_token(token):
+        pass
+
+    def create_user(user_data):
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
+
+    async def get_current_active_user():
+        return User(username="anonymous")
+
+    async def get_current_admin_user():
+        raise HTTPException(status_code=403, detail="Authentication required")
+
+    async def rate_limit_dependency(request: Request):
+        """Fallback rate limiting - no actual limiting"""
+        return True
+
+    def log_security_event(event_type: str, user: Optional[str] = None,
+                          request: Optional[Request] = None, details: Optional[dict] = None):
+        """Fallback security logging"""
+        logger.info(f"Security event (auth disabled): {event_type}")
+
+    class SecurityHeadersMiddleware:
+        """Fallback security headers middleware"""
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            await self.app(scope, receive, send)
+
+    # Fallback user database
+    fake_users_db = {}
+
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Import metrics
 from metrics import (
@@ -146,6 +308,10 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application...")
 
 app = FastAPI(title=APP_TITLE, lifespan=lifespan)
+
+# Add security middleware
+if AUTH_ENABLED:
+    app.add_middleware(SecurityHeadersMiddleware)
 
 # Add Prometheus middleware
 app.add_middleware(PrometheusMiddleware)
@@ -369,6 +535,170 @@ async def get_metrics():
     """Prometheus metrics endpoint"""
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
+# Authentication endpoints
+if AUTH_ENABLED:
+    @app.post("/auth/token", response_model=Token)
+    async def login_for_access_token(
+        form_data: OAuth2PasswordRequestForm = Depends(),
+        request: Request = Request,
+        _: bool = Depends(rate_limit_dependency)
+    ):
+        """Login endpoint to get JWT token pair"""
+        try:
+            user = authenticate_user(form_data.username, form_data.password)
+            if not user:
+                log_security_event("login_failed", form_data.username, request)
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Incorrect username or password",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            token_pair = create_token_pair(user)
+            log_security_event("login_success", user.username, request)
+
+            return token_pair
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Login error: {str(e)}")
+            log_security_event("login_error", form_data.username, request, {"error": str(e)})
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Authentication service error"
+            )
+
+    @app.post("/auth/refresh", response_model=Token)
+    async def refresh_token(
+        refresh_request: RefreshTokenRequest,
+        request: Request = Request
+    ):
+        """Refresh access token using refresh token"""
+        try:
+            new_token_pair = refresh_access_token(refresh_request.refresh_token)
+            log_security_event("token_refresh", request=request)
+            return new_token_pair
+        except HTTPException:
+            log_security_event("token_refresh_failed", request=request)
+            raise
+        except Exception as e:
+            logger.error(f"Token refresh error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Token refresh failed"
+            )
+
+    @app.post("/auth/revoke")
+    async def revoke_token_endpoint(
+        current_user: User = Depends(get_current_active_user),
+        request: Request = Request
+    ):
+        """Revoke current token"""
+        try:
+            # Get token from request
+            auth_header = request.headers.get("authorization")
+            if (auth_header and auth_header.startswith("Bearer ")):
+                token = auth_header.split(" ")[1]
+                revoke_token(token)
+                log_security_event("token_revoked", current_user.username, request)
+                return {"message": "Token revoked successfully"}
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No token provided"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Token revoke error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Token revocation failed"
+            )
+
+    @app.post("/auth/register", response_model=User)
+    async def register_user(
+        user_data: UserCreate,
+        request: Request = Request,
+        _: bool = Depends(rate_limit_dependency)
+    ):
+        """Register a new user"""
+        try:
+            new_user = create_user(user_data)
+            log_security_event("user_registered", new_user.username, request)
+            return new_user
+        except HTTPException:
+            log_security_event("user_registration_failed", user_data.username, request)
+            raise
+        except Exception as e:
+            logger.error(f"User registration error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="User registration failed"
+            )
+
+    @app.get("/auth/me", response_model=User)
+    async def read_users_me(current_user: User = Depends(get_current_active_user)):
+        """Get current user information"""
+        return current_user
+
+    @app.get("/auth/admin/users")
+    async def list_users(
+        current_user: User = Depends(get_current_admin_user),
+        skip: int = 0,
+        limit: int = 100
+    ):
+        """List all users (admin only)"""
+        # In production, this would query the database
+        users = []
+        for user_data in list(fake_users_db.values())[skip:skip+limit]:
+            user = User(**user_data)
+            users.append(user)
+        return {"users": users, "total": len(fake_users_db)}
+
+else:
+    # Add disabled auth endpoints that return appropriate errors
+    @app.post("/auth/token")
+    async def login_disabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is disabled"
+        )
+
+    @app.post("/auth/refresh")
+    async def refresh_disabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is disabled"
+        )
+
+    @app.post("/auth/revoke")
+    async def revoke_disabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is disabled"
+        )
+
+    @app.post("/auth/register")
+    async def register_disabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is disabled"
+        )
+
+    @app.get("/auth/me")
+    async def me_disabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is disabled"
+        )
+
+    @app.get("/auth/admin/users")
+    async def list_users_disabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is disabled"
+        )
 
 @app.get("/")
 def root():
@@ -402,7 +732,11 @@ def root():
     }
 
 @app.post("/docs/", status_code=201)
-async def index_doc(doc: Doc):
+async def index_doc(
+    doc: Doc,
+    current_user: User = Depends(get_current_active_user),
+    request: Request = Request
+):
     """Index a document with structured data"""
     if not doc.id or not doc.id.strip():
         raise HTTPException(status_code=400, detail="Document ID is required and cannot be empty")
@@ -416,6 +750,8 @@ async def index_doc(doc: Doc):
     try:
         resp = es_operation_with_retry(es.index, index=INDEX, id=doc.id, document=doc.model_dump())
         record_document_indexed("api")
+        if AUTH_ENABLED:
+            log_security_event("document_indexed", current_user.username, request, {"doc_id": doc.id})
         return {"result": resp["result"], "id": resp["_id"]}
     except ConnectionError:
         raise HTTPException(status_code=503, detail="Elasticsearch service unavailable")
@@ -429,7 +765,7 @@ async def index_doc(doc: Doc):
 
 
 @app.get("/docs/{doc_id}")
-async def get_doc(doc_id: str):
+async def get_doc(doc_id: str, current_user: User = Depends(get_current_active_user)):
     if not doc_id or not doc_id.strip():
         raise HTTPException(status_code=400, detail="Document ID is required")
 
@@ -450,13 +786,15 @@ async def get_doc(doc_id: str):
 
 @app.post("/docs/upload/")
 async def upload_doc(
-        file: UploadFile = File(...),
-        doc_id: str = Form(...),
-        title: Optional[str] = Form(None),
-        tags: Optional[str] = Form(None),
-        author: Optional[str] = Form(None),
-        source_system: Optional[str] = Form("ingestion-api"),
-        enable_chunking: bool = Form(False)
+    file: UploadFile = File(...),
+    doc_id: str = Form(...),
+    title: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
+    author: Optional[str] = Form(None),
+    source_system: Optional[str] = Form("ingestion-api"),
+    enable_chunking: bool = Form(False),
+    current_user: User = Depends(get_current_active_user),
+    request: Request = Request
 ):
     """Upload and index a document from a file (PDF, Word, Markdown, etc.)"""
     # Input validation
@@ -504,6 +842,9 @@ async def upload_doc(
             record_document_indexed("upload")
             record_document_chunks(result["chunks"])
             record_file_upload(file_type, file_size, "success")
+            if AUTH_ENABLED:
+                log_security_event("document_uploaded", current_user.username, request,
+                                 {"doc_id": doc_id, "filename": file.filename, "chunked": True})
             return result
         else:
             doc = Doc(
@@ -517,6 +858,9 @@ async def upload_doc(
             response = es_operation_with_retry(es.index, index=INDEX, id=doc.id, document=doc.model_dump())
             record_document_indexed("upload")
             record_file_upload(file_type, file_size, "success")
+            if AUTH_ENABLED:
+                log_security_event("document_uploaded", current_user.username, request,
+                                 {"doc_id": doc_id, "filename": file.filename, "chunked": False})
 
             return {
                 "result": response["result"],
@@ -574,7 +918,13 @@ async def index_chunked_document(doc_id: str, title: str, content: str, tags: Li
 
 
 @app.get("/search/")
-async def search(q: str, size: int = 10, group_chunks: bool = True):
+async def search(
+    q: str,
+    size: int = 10,
+    group_chunks: bool = True,
+    current_user: User = Depends(get_current_active_user),
+    request: Request = Request
+):
     """Search for documents"""
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="Search query is required")
@@ -620,6 +970,9 @@ async def search(q: str, size: int = 10, group_chunks: bool = True):
                 results.append(result)
 
         record_search_request(group_chunks, len(results))
+        if AUTH_ENABLED:
+            log_security_event("search_performed", current_user.username, request,
+                             {"query": q, "results_count": len(results)})
 
         return {
             "total": total_results,
@@ -645,7 +998,7 @@ def group_chunk_results(hits: List[dict], limit: int) -> List[dict]:
         if not parent_id:
             tags = source.get("tags", [])
             for tag in tags:
-                if tag.startswith("parent:"):
+                if (tag.startswith("parent:")):
                     parent_id = tag.split("parent:", 1)[1]
                     break
 

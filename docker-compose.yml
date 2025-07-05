@@ -9,7 +9,7 @@ services:
       - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
       - xpack.security.enabled=true
       - xpack.security.http.ssl.enabled=true
-      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.enabled=false
     ulimits:
       memlock:
         soft: -1
@@ -44,6 +44,9 @@ services:
       - ELASTICSEARCH_CA_PATH=/app/certs/ca/ca.crt
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
+      - JWT_SECRET_KEY=your-super-secret-jwt-key-change-this-in-production
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
     volumes:
       - ./certs:/app/certs:ro
     ports:
