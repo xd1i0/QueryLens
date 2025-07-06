@@ -94,7 +94,7 @@ if AUTH_ENABLED:
     try:
         from auth.jwt_handler import (
             authenticate_user, create_token_pair, refresh_access_token, revoke_token,
-            Token, User, UserCreate, RefreshTokenRequest,
+            Token, User, UserCreate, RefreshTokenRequest, create_user,
             JWT_ACCESS_TOKEN_EXPIRE_MINUTES, fake_users_db
         )
         from auth.dependencies import get_current_active_user, get_current_admin_user, rate_limit_dependency
@@ -152,9 +152,24 @@ if not AUTH_ENABLED:
 
     # Fallback auth functions
     def authenticate_user(username, password):
-        # When auth is disabled, allow any user to authenticate for testing
-        if username in fake_users_db and fake_users_db[username]["password"] == password:
-            return User(**fake_users_db[username])
+        """Authenticate user with hashed password support"""
+        import hashlib
+
+        if username not in fake_users_db:
+            return None
+
+        user_data = fake_users_db[username]
+
+        # Check if password is hashed (contains salt)
+        if "hashed_password" in user_data and ":" in user_data["hashed_password"]:
+            stored_hash, salt = user_data["hashed_password"].split(":", 1)
+            computed_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+            if computed_hash == stored_hash:
+                return User(**user_data)
+        # Fallback for plain text passwords (for existing test users)
+        elif user_data.get("password") == password:
+            return User(**user_data)
+
         return None
 
     def create_token_pair(user):
