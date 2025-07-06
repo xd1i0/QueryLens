@@ -54,7 +54,6 @@ class TestSecurityConfiguration:
     @patch('main.ES_DISABLE_SSL_VERIFICATION', False)
     def test_create_ssl_context_missing_ca_file(self):
         """Test SSL context with missing CA certificate file"""
-        # Mock the SSLContext to track calls to load_default_certs
         with patch('ssl.create_default_context') as mock_create_context:
             mock_context = Mock()
             mock_create_context.return_value = mock_context
@@ -62,7 +61,7 @@ class TestSecurityConfiguration:
             context = create_ssl_context()
 
             assert context is not None
-            # Verify that load_default_certs was called on our mock context
+            # Verify that load_default_certs was called when CA file is missing
             mock_context.load_default_certs.assert_called_once()
 
     @patch('main.ES_HOST', 'https://localhost:9200')
@@ -71,17 +70,19 @@ class TestSecurityConfiguration:
     @patch('main.ES_DISABLE_SSL_VERIFICATION', False)
     def test_create_ssl_context_fallback_to_disabled(self):
         """Test SSL context fallback to disabled verification"""
-        # Mock the SSLContext to simulate failure in load_default_certs
         with patch('ssl.create_default_context') as mock_create_context:
             mock_context = Mock()
-            mock_context.load_default_certs.side_effect = ssl.SSLError("Failed")
+            mock_context.load_default_certs.side_effect = ssl.SSLError("Failed to load default certs")
             mock_create_context.return_value = mock_context
 
             context = create_ssl_context()
 
             assert context is not None
-            assert context.check_hostname is False
-            assert context.verify_mode == ssl.CERT_NONE
+            # Verify that the mock context was modified correctly
+            assert mock_context.check_hostname is False
+            assert mock_context.verify_mode == ssl.CERT_NONE
+            # Verify that load_default_certs was called and failed
+            mock_context.load_default_certs.assert_called_once()
 
 class TestTextExtraction:
     def test_extract_text_from_markdown(self):
