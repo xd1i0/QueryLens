@@ -1,0 +1,98 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.2
+    container_name: qlens-es
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=/usr/share/elasticsearch/config/certs/instance.key
+      - xpack.security.http.ssl.certificate=/usr/share/elasticsearch/config/certs/instance.crt
+      - xpack.security.http.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca/ca.crt
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=/usr/share/elasticsearch/config/certs/instance.key
+      - xpack.security.transport.ssl.certificate=/usr/share/elasticsearch/config/certs/instance.crt
+      - xpack.security.transport.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca/ca.crt
+      - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD}
+    volumes:
+      - ./certs:/usr/share/elasticsearch/config/certs:ro
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - querylens-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -u elastic:${ELASTICSEARCH_PASSWORD} https://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  ingestion:
+    build: ./ingestion-service
+    container_name: qlens-ingest
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOST=https://elasticsearch:9200
+      - ELASTICSEARCH_INDEX=docs
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD}
+      - ELASTICSEARCH_VERIFY_CERTS=true
+      - ELASTICSEARCH_CA_PATH=/app/certs/ca/ca.crt
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - JWT_SECRET_KEY=your-super-secret-jwt-key-change-this-in-production
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+    volumes:
+      - ./certs:/app/certs:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - querylens-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8000/ || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: qlens-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - querylens-network
+    depends_on:
+      - ingestion
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: qlens-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - querylens-network
+    depends_on:
+      - prometheus
+
+volumes:
+  esdata:
+    driver: local
+
+networks:
+  querylens-network:
+    driver: bridge

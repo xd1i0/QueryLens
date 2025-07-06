@@ -1,0 +1,36 @@
+# elasticsearch.yml
+cluster.name: querylens-cluster
+node.name: querylens-node-1
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+
+# Discovery settings (for single node)
+discovery.type: single-node
+
+# Security settings - enable HTTP SSL but disable transport SSL for single node
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: true
+xpack.security.transport.ssl.enabled: false
+
+# SSL configuration for HTTP
+xpack.security.http.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.http.ssl.truststore.path: certs/elastic-certificates.p12
+
+# Memory settings
+bootstrap.memory_lock: true
+
+# Path settings
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
+
+# Index settings
+action.auto_create_index: true
+action.destructive_requires_name: false
+
+# Performance tuning
+search.max_buckets: 65536
+
+# Logging
+logger.level: INFO
