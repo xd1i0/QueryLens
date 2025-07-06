@@ -53,7 +53,8 @@ jobs:
             unrtf \
             poppler-utils \
             tesseract-ocr \
-            curl
+            curl \
+            jq
 
       - name: Install Python dependencies
         run: |
@@ -77,9 +78,11 @@ jobs:
           cd ingestion-service/src
           python -m pytest test_unit.py -v --tb=short
         env:
-            ELASTICSEARCH_HOST: http://localhost:9200
-            ELASTICSEARCH_INDEX: test_docs
-            ELASTICSEARCH_VERIFY_CERTS: false
+          ELASTICSEARCH_HOST: http://localhost:9200
+          ELASTICSEARCH_INDEX: test_docs
+          ELASTICSEARCH_VERIFY_CERTS: false
+          JWT_SECRET_KEY: test_secret_key_for_github_actions
+          JWT_ALGORITHM: HS256
 
       - name: Run integration tests
         run: |
@@ -89,6 +92,8 @@ jobs:
           ELASTICSEARCH_HOST: http://localhost:9200
           ELASTICSEARCH_INDEX: test_docs
           ELASTICSEARCH_VERIFY_CERTS: false
+          JWT_SECRET_KEY: test_secret_key_for_github_actions
+          JWT_ALGORITHM: HS256
 
       - name: Start API for E2E tests
         run: |
@@ -99,6 +104,8 @@ jobs:
           ELASTICSEARCH_HOST: http://localhost:9200
           ELASTICSEARCH_INDEX: test_docs_e2e
           ELASTICSEARCH_VERIFY_CERTS: false
+          JWT_SECRET_KEY: test_secret_key_for_github_actions
+          JWT_ALGORITHM: HS256
 
       - name: Run end-to-end tests
         run: |
@@ -108,6 +115,8 @@ jobs:
           ELASTICSEARCH_HOST: http://localhost:9200
           ELASTICSEARCH_INDEX: test_docs_e2e
           ELASTICSEARCH_VERIFY_CERTS: false
+          JWT_SECRET_KEY: test_secret_key_for_github_actions
+          JWT_ALGORITHM: HS256
 
   docker-test:
     runs-on: ubuntu-latest
@@ -137,22 +146,52 @@ jobs:
         run: |
           docker-compose -f docker-compose.yml up -d
           sleep 60
-                
-          # Test health endpoint
+          
+          # Test health endpoint (no auth required)
           curl -f http://localhost:8000/ || exit 1
-                
-          # Test document indexing
-          curl -X POST "http://localhost:8000/docs/" \
-            -H "Content-Type: application/json" \
-            -d '{"id":"test-1","title":"Test","content":"Test content"}' || exit 1
-                
-          # Wait for indexing
-          sleep 5
-                
-          # Test search
-          curl -f "http://localhost:8000/search/?q=test" || exit 1
-                
-          # Test document retrieval
-          curl -f "http://localhost:8000/docs/test-1" || exit 1
-                
+          
+          # Get authentication token for testing
+          TOKEN=$(curl -s -X POST "http://localhost:8000/auth/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "username=testuser&password=testpass123" | jq -r '.access_token')
+          
+          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
+            echo "Failed to get authentication token"
+            # Try without authentication (fallback mode)
+            echo "Testing in fallback mode without authentication"
+            
+            # Test document indexing without auth
+            curl -X POST "http://localhost:8000/docs/" \
+              -H "Content-Type: application/json" \
+              -d '{"id":"test-1","title":"Test","content":"Test content"}' || exit 1
+            
+            # Wait for indexing
+            sleep 5
+            
+            # Test search without auth
+            curl -f "http://localhost:8000/search/?q=test" || exit 1
+            
+            # Test document retrieval without auth
+            curl -f "http://localhost:8000/docs/test-1" || exit 1
+          else
+            echo "Authentication successful, testing with token"
+            
+            # Test document indexing with auth
+            curl -X POST "http://localhost:8000/docs/" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $TOKEN" \
+              -d '{"id":"test-1","title":"Test","content":"Test content"}' || exit 1
+            
+            # Wait for indexing
+            sleep 5
+            
+            # Test search with auth
+            curl -f "http://localhost:8000/search/?q=test" \
+              -H "Authorization: Bearer $TOKEN" || exit 1
+            
+            # Test document retrieval with auth
+            curl -f "http://localhost:8000/docs/test-1" \
+              -H "Authorization: Bearer $TOKEN" || exit 1
+          fi
+          
           docker-compose -f docker-compose.yml down
