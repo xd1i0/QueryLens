@@ -2,21 +2,22 @@ import os
 import sys
 import time
 import ssl
-from dotenv import load_dotenv
-from elasticsearch import Elasticsearch, ConnectionError, TransportError, NotFoundError
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Depends, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from models import Doc
-import tempfile
 from typing import Optional, List
 import magic
 import textract
+import re
+
+from dotenv import load_dotenv
+from elasticsearch import Elasticsearch, ConnectionError, TransportError, NotFoundError
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, Depends, status, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from fastapi.security import OAuth2PasswordRequestForm
+from models import Doc
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-import logging
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from datetime import datetime, timedelta
+from datetime import datetime
+import logging
 
 # Enhanced import path handling for auth module
 def setup_auth_imports():
@@ -211,46 +212,28 @@ CHUNK_THRESHOLD_WORDS = int(os.getenv("CHUNK_THRESHOLD_WORDS", "500"))
 
 
 def create_ssl_context():
-    """Create SSL context for Elasticsearch connection with enhanced security handling"""
+    """Create SSL context for Elasticsearch connection"""
     if not ES_HOST.startswith("https://"):
         logger.info("Using HTTP connection (no SSL)")
         return None
 
     context = ssl.create_default_context()
 
-    # If SSL verification is explicitly disabled (for development/testing)
     if ES_DISABLE_SSL_VERIFICATION:
-        logger.warning("SSL certificate verification is DISABLED - this should only be used in development!")
+        logger.warning("SSL certificate verification is DISABLED")
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         return context
 
-    # Try to use provided CA certificate first
-    if ES_VERIFY_CERTS:
-        if os.path.exists(ES_CA_PATH):
-            try:
-                context.load_verify_locations(ES_CA_PATH)
-                logger.info(f"Using CA certificate from: {ES_CA_PATH}")
-                return context
-            except ssl.SSLError as e:
-                logger.error(f"Failed to load CA certificate from {ES_CA_PATH}: {e}")
-        else:
-            logger.warning(f"CA certificate not found at {ES_CA_PATH}")
-
-        # Try to use system CA store
+    if ES_VERIFY_CERTS and os.path.exists(ES_CA_PATH):
         try:
-            context.load_default_certs()
-            logger.info("Using system CA certificate store")
-            return context
+            context.load_verify_locations(ES_CA_PATH)
+            logger.info(f"Using CA certificate from: {ES_CA_PATH}")
         except ssl.SSLError as e:
-            logger.error(f"Failed to load system CA certificates: {e}")
-
-        # If all else fails, warn and disable verification
-        logger.warning("Cannot verify SSL certificates - disabling SSL verification for connection")
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    else:
-        logger.info("SSL certificate verification disabled by configuration")
+            logger.error(f"Failed to load CA certificate: {e}")
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+    elif not ES_VERIFY_CERTS:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
 
@@ -423,6 +406,7 @@ def wait_for_es(max_retries=30, delay=2):
 
 
 def extract_text_from_file(file_content: bytes, filename: str) -> tuple[str, str]:
+    import tempfile
     """Extract text from a file using textract with metrics"""
     if not filename:
         raise HTTPException(status_code=400, detail="Filename is required")
@@ -919,8 +903,8 @@ async def index_chunked_document(doc_id: str, title: str, content: str, tags: Li
 
 @app.get("/search/")
 async def search(
-    q: str,
-    size: int = 10,
+    q: str = Query(..., min_length=1, max_length=500, pattern=r"^[a-zA-Z0-9\s\-_.]+$"),
+    size: int = Query(10, ge=1, le=100),
     group_chunks: bool = True,
     current_user: User = Depends(get_current_active_user),
     request: Request = Request

@@ -1,43 +1,28 @@
 #!/bin/bash
 
-# Create certs directory if it doesn't exist
-mkdir -p certs
+# Create certs directory structure
+mkdir -p certs/ca
 
-echo "🔧 Generating Elasticsearch certificates..."
+# Generate CA private key
+openssl genrsa -out certs/ca/ca.key 4096
 
-# Clean up any existing certificates
-rm -rf certs/*
+# Generate CA certificate
+openssl req -new -x509 -days 365 -key certs/ca/ca.key -out certs/ca/ca.crt -subj "/C=US/ST=State/L=City/O=Organization/CN=ElasticCA"
 
-# Generate CA and node certificates using Elasticsearch Docker image
-docker run --rm -v $PWD/certs:/certs docker.elastic.co/elasticsearch/elasticsearch:8.8.2 \
-  sh -c "
-    # Generate CA certificate
-    bin/elasticsearch-certutil ca --silent --out /certs/ca.p12 --pass '' && \
+# Generate instance private key
+openssl genrsa -out certs/instance.key 4096
 
-    # Generate node certificate
-    bin/elasticsearch-certutil cert --silent --ca /certs/ca.p12 --ca-pass '' --out /certs/elastic-certificates.p12 --pass '' && \
+# Generate certificate signing request
+openssl req -new -key certs/instance.key -out certs/instance.csr -subj "/C=US/ST=State/L=City/O=Organization/CN=elasticsearch"
 
-    # Generate PEM format certificates for easier use
-    bin/elasticsearch-certutil ca --silent --pem --out /certs/ca.zip --pass '' && \
-    cd /certs && unzip -o ca.zip && \
+# Generate instance certificate signed by CA
+openssl x509 -req -in certs/instance.csr -CA certs/ca/ca.crt -CAkey certs/ca/ca.key -CAcreateserial -out certs/instance.crt -days 365
 
-    # Generate node certificates in PEM format
-    bin/elasticsearch-certutil cert --silent --ca /certs/ca.p12 --ca-pass '' --pem --out /certs/certs.zip --pass '' && \
-    cd /certs && unzip -o certs.zip
-  "
+# Clean up CSR file
+rm certs/instance.csr
 
-# Set appropriate permissions - make readable by all users
-chmod 755 certs/
-chmod 644 certs/*.p12 2>/dev/null || true
-chmod 644 certs/*.crt 2>/dev/null || true
-chmod 644 certs/*.key 2>/dev/null || true
-chmod 755 certs/ca/ 2>/dev/null || true
-chmod 644 certs/ca/* 2>/dev/null || true
+# Set proper permissions
+chmod 644 certs/ca/ca.crt certs/instance.crt
+chmod 600 certs/ca/ca.key certs/instance.key
 
-echo "✅ Certificates generated successfully in ./certs/"
-echo "Files created:"
-ls -la certs/
-if [ -d "certs/ca" ]; then
-    echo "CA directory contents:"
-    ls -la certs/ca/
-fi
+echo "SSL certificates generated successfully!"

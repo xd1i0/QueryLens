@@ -4,19 +4,20 @@ services:
     container_name: qlens-es
     environment:
       - discovery.type=single-node
-      - ELASTIC_PASSWORD=changeme123!
       - bootstrap.memory_lock=true
-      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
       - xpack.security.enabled=true
       - xpack.security.http.ssl.enabled=true
-      - xpack.security.transport.ssl.enabled=false
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
+      - xpack.security.http.ssl.key=/usr/share/elasticsearch/config/certs/instance.key
+      - xpack.security.http.ssl.certificate=/usr/share/elasticsearch/config/certs/instance.crt
+      - xpack.security.http.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca/ca.crt
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=/usr/share/elasticsearch/config/certs/instance.key
+      - xpack.security.transport.ssl.certificate=/usr/share/elasticsearch/config/certs/instance.crt
+      - xpack.security.transport.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca/ca.crt
+      - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD}
     volumes:
       - ./certs:/usr/share/elasticsearch/config/certs:ro
-      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
       - esdata:/usr/share/elasticsearch/data
     ports:
       - "9200:9200"
@@ -24,7 +25,7 @@ services:
     networks:
       - querylens-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u elastic:changeme123! https://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -k -u elastic:${ELASTICSEARCH_PASSWORD} https://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -39,8 +40,8 @@ services:
       - ELASTICSEARCH_HOST=https://elasticsearch:9200
       - ELASTICSEARCH_INDEX=docs
       - ELASTICSEARCH_USERNAME=elastic
-      - ELASTICSEARCH_PASSWORD=changeme123!
-      - ELASTICSEARCH_VERIFY_CERTS=false
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD}
+      - ELASTICSEARCH_VERIFY_CERTS=true
       - ELASTICSEARCH_CA_PATH=/app/certs/ca/ca.crt
       - APP_HOST=0.0.0.0
       - APP_PORT=8000

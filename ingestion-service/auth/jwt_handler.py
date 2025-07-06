@@ -95,7 +95,7 @@ class UserInDB(User):
     locked_until: Optional[datetime] = None
 
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50, regex=r'^[a-zA-Z0-9_-]+$')
+    username: str = Field(..., min_length=3, max_length=50, pattern=r'^[a-zA-Z0-9_-]+$')
     email: EmailStr
     full_name: Optional[str] = Field(None, max_length=100)
     password: str = Field(..., min_length=8, max_length=128)
