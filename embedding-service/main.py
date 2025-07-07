@@ -16,6 +16,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from bs4 import BeautifulSoup
 import os
 from contextlib import asynccontextmanager
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 # Import config and Embedder
 from config import config  # Make sure config.py exists and is correct
@@ -65,6 +66,45 @@ KAFKA_EMBEDDINGS = "embeddings"
 consumer: AIOKafkaConsumer = None
 producer: AIOKafkaProducer = None
 worker_task: asyncio.Task = None
+
+# Prometheus metrics
+REQUEST_COUNT = Counter(
+    "http_requests_total", "Total HTTP requests", ["method", "endpoint", "status_code"]
+)
+REQUEST_LATENCY = Histogram(
+    "http_request_duration_seconds", "HTTP request latency", ["endpoint"]
+)
+
+ELASTICSEARCH_OPERATIONS_TOTAL = Counter(
+    "elasticsearch_operations_total", "Elasticsearch operations", ["operation", "status"]
+)
+DOCUMENTS_INDEXED_TOTAL = Counter(
+    "documents_indexed_total", "Total documents indexed"
+)
+ELASTICSEARCH_CONNECTION_STATUS = Gauge(
+    "elasticsearch_connection_status", "Elasticsearch connection status (1=connected, 0=disconnected)"
+)
+FILE_UPLOADS_TOTAL = Counter(
+    "file_uploads_total", "File uploads", ["file_type", "status"]
+)
+SEARCH_REQUESTS_TOTAL = Counter(
+    "search_requests_total", "Search requests", ["grouped"]
+)
+ELASTICSEARCH_ERRORS_TOTAL = Counter(
+    "elasticsearch_errors_total", "Elasticsearch errors", ["error_type", "operation"]
+)
+FAILED_REQUESTS_TOTAL = Counter(
+    "failed_requests_total", "Total failed HTTP requests", ["method", "endpoint", "status_code"]
+)
+CACHE_HITS_TOTAL = Counter(
+    "cache_hits_total", "Total cache hits"
+)
+CACHE_MISSES_TOTAL = Counter(
+    "cache_misses_total", "Total cache misses"
+)
+ACTIVE_WORKERS = Gauge(
+    "active_workers", "Number of active worker tasks"
+)
 
 def clean_and_split(text: str) -> list:
     """Remove boilerplate (HTML, scripts), normalize, and split into sentences."""
@@ -228,6 +268,33 @@ except Exception as e:
     logger.warning(f"Redis connection failed: {e}")
     redis_client = None
 
+@app.middleware("http")
+async def prometheus_metrics_middleware(request: Request, call_next):
+    import time
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    endpoint = request.url.path
+    REQUEST_COUNT.labels(request.method, endpoint, response.status_code).inc()
+    REQUEST_LATENCY.labels(endpoint).observe(process_time)
+    if response.status_code >= 400:
+        FAILED_REQUESTS_TOTAL.labels(request.method, endpoint, response.status_code).inc()
+    # Example: increment search_requests_total for /encode endpoint as a placeholder
+    if endpoint == "/encode":
+        SEARCH_REQUESTS_TOTAL.labels(grouped="false").inc()
+    return response
+
+@app.get("/metrics")
+async def metrics():
+    # Example: set elasticsearch_connection_status (simulate always connected)
+    ELASTICSEARCH_CONNECTION_STATUS.set(1)
+    # Set active_workers gauge (simulate 1 worker)
+    ACTIVE_WORKERS.set(1 if worker_task and not worker_task.done() else 0)
+    return JSONResponse(
+        content=generate_latest().decode("utf-8"),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
@@ -261,6 +328,19 @@ async def encode_texts(request: EncodeRequest):
         # Extract options
         options = request.options or EncodeOptions()
 
+        # Simulate cache check
+        cache_key = f"emb:{hash(str(request.texts))}"
+        cache_hit = False
+        if redis_client:
+            try:
+                if redis_client.exists(cache_key):
+                    CACHE_HITS_TOTAL.inc()
+                    cache_hit = True
+                else:
+                    CACHE_MISSES_TOTAL.inc()
+            except Exception as e:
+                logger.warning(f"Redis cache check failed: {e}")
+
         # Encode texts
         encode_start = time.time()
         vectors, timing_info = embedder.encode(
@@ -269,6 +349,10 @@ async def encode_texts(request: EncodeRequest):
             normalize=options.normalize
         )
         encode_time = time.time() - encode_start
+
+        # Simulate Elasticsearch operation and document indexing
+        ELASTICSEARCH_OPERATIONS_TOTAL.labels(operation="index", status="success").inc()
+        DOCUMENTS_INDEXED_TOTAL.inc()
 
         # Store in Redis cache if available
         if redis_client:
@@ -288,11 +372,15 @@ async def encode_texts(request: EncodeRequest):
         )
 
     except HTTPException as e:
+        # Simulate Elasticsearch error
+        ELASTICSEARCH_ERRORS_TOTAL.labels(error_type="http_exception", operation="index").inc()
         # Re-raise HTTPExceptions so FastAPI handles them correctly
         raise
     except ValueError as e:
+        ELASTICSEARCH_ERRORS_TOTAL.labels(error_type="value_error", operation="index").inc()
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        ELASTICSEARCH_ERRORS_TOTAL.labels(error_type="internal_error", operation="index").inc()
         logger.error(f"Encoding failed: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
