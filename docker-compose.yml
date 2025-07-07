@@ -33,23 +33,13 @@ services:
   ingestion:
     build: ./ingestion-service
     container_name: qlens-ingest
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
     environment:
-      - ELASTICSEARCH_HOST=https://elasticsearch:9200
-      - ELASTICSEARCH_INDEX=docs
-      - ELASTICSEARCH_USERNAME=elastic
-      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD}
-      - ELASTICSEARCH_VERIFY_CERTS=true
-      - ELASTICSEARCH_CA_PATH=/app/certs/ca/ca.crt
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
-      - JWT_SECRET_KEY=your-super-secret-jwt-key-change-this-in-production
-      - JWT_ALGORITHM=HS256
-      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
-    volumes:
-      - ./certs:/app/certs:ro
+      - KAFKA_BOOTSTRAP=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
     ports:
       - "8000:8000"
     networks:
@@ -88,10 +78,102 @@ services:
       - querylens-network
     depends_on:
       - prometheus
+  redis:
+    image: redis:7-alpine
+    container_name: qlens-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - querylens-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  embedding:
+    build: ./embedding-service
+    container_name: qlens-embedding
+    ports:
+      - "8002:8000"  # API port (external:internal)
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - DEFAULT_MODEL=all-minilm-l6-v2
+      - MODEL_POOL_SIZE=4
+      - DEFAULT_BATCH_SIZE=32
+      - MAX_BATCH_SIZE=128
+      - MAX_TEXTS_PER_REQUEST=1000
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - model_cache:/root/.cache/huggingface
+    networks:
+      - querylens-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - querylens-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Listeners that Kafka will advertise to clients:
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    volumes:
+        - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "echo > /dev/tcp/localhost/9092"
+        ]
+      interval: 10s
+      retries: 5
+    networks:
+        - querylens-network
 
 volumes:
   esdata:
     driver: local
+  redis_data:
+    driver: local
+  model_cache:
+    driver: local
+  kafka_data:
 
 networks:
   querylens-network:
