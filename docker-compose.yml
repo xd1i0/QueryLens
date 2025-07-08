@@ -6,18 +6,11 @@ services:
       - discovery.type=single-node
       - bootstrap.memory_lock=true
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - xpack.security.enabled=true
-      - xpack.security.http.ssl.enabled=true
-      - xpack.security.http.ssl.key=/usr/share/elasticsearch/config/certs/instance.key
-      - xpack.security.http.ssl.certificate=/usr/share/elasticsearch/config/certs/instance.crt
-      - xpack.security.http.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca/ca.crt
-      - xpack.security.transport.ssl.enabled=true
-      - xpack.security.transport.ssl.key=/usr/share/elasticsearch/config/certs/instance.key
-      - xpack.security.transport.ssl.certificate=/usr/share/elasticsearch/config/certs/instance.crt
-      - xpack.security.transport.ssl.certificate_authorities=/usr/share/elasticsearch/config/certs/ca/ca.crt
-      - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD}
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD=
     volumes:
-      - ./certs:/usr/share/elasticsearch/config/certs:ro
       - esdata:/usr/share/elasticsearch/data
     ports:
       - "9200:9200"
@@ -25,7 +18,7 @@ services:
     networks:
       - querylens-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u elastic:${ELASTICSEARCH_PASSWORD} https://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -k http://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -129,19 +122,22 @@ services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     hostname: zookeeper
-    container_name: zookeeper
+    container_name: qlens-zookeeper
     ports:
       - "2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_data:/var/lib/zookeeper/log
     networks:
       - querylens-network
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     hostname: kafka
-    container_name: kafka
+    container_name: qlens-kafka
     depends_on:
       - zookeeper
     ports:
@@ -149,12 +145,11 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # Listeners that Kafka will advertise to clients:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     volumes:
-        - kafka_data:/var/lib/kafka/data
+      - kafka_data:/var/lib/kafka/data
     healthcheck:
       test:
         [
@@ -164,7 +159,24 @@ services:
       interval: 10s
       retries: 5
     networks:
-        - querylens-network
+      - querylens-network
+
+  es-index:
+    build: ./es-index-service
+    container_name: qlens-es-index
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - ES_INDEX=docs
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - BULK_BATCH_SIZE=200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - querylens-network
+    restart: unless-stopped
 
 volumes:
   esdata:
@@ -174,6 +186,9 @@ volumes:
   model_cache:
     driver: local
   kafka_data:
+    driver: local
+  zookeeper_data:
+    driver: local
 
 networks:
   querylens-network:
