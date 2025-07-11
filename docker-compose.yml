@@ -178,6 +178,34 @@ services:
       - querylens-network
     restart: unless-stopped
 
+  faiss-index:
+    build: ./faiss-index-service
+    container_name: qlens-faiss-indexer
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_TOPIC=embeddings
+      - FAISS_INDEX_PATH=/data/faiss.index
+      - REDIS_URL=redis://redis:6379/0
+      - REBUILD_INTERVAL=10000
+      - INDEX_DIM=384
+      - METRICS_PORT=8001
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - faiss_index_data:/data
+    networks:
+      - querylens-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8001/metrics" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 volumes:
   esdata:
     driver: local
@@ -188,6 +216,8 @@ volumes:
   kafka_data:
     driver: local
   zookeeper_data:
+    driver: local
+  faiss_index_data:
     driver: local
 
 networks:
