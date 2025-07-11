@@ -315,8 +315,12 @@ async def encode_texts(request: EncodeRequest):
     - **options**: Encoding options (normalize, batch_size)
     """
     try:
+        model_name = request.model
+        if model_name == "default":
+            model_name = config.default_model
+
         # Validate model
-        if request.model not in config.supported_models:
+        if model_name not in config.supported_models:
             raise HTTPException(
                 status_code=400,
                 detail=(

@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import numpy as np
 import main
 import json
+from fastapi.testclient import TestClient  # Fix NameError by importing TestClient
 
 
 class TestHelperFunctions(unittest.TestCase):
@@ -111,6 +112,39 @@ class TestEndToEndBatch(unittest.IsolatedAsyncioTestCase):
             {"doc_id": "invalid-doc", "chunk_id": "1", "vector": "not-a-list", "metadata": {}}
         ]
         await main.process_faiss_batch(batch)  # Should skip invalid vector
+
+
+class TestSearchEndpoint(unittest.TestCase):
+    @patch("main.faiss_index")
+    @patch("main.redis_client")
+    def test_search_faiss_success(self, mock_redis, mock_faiss_index):
+        mock_faiss_index.d = 384
+        mock_faiss_index.search.return_value = (np.array([[0.9, 0.8]]), np.array([[0, 1]]))
+        mock_redis.get.side_effect = lambda key: "vec_id_1" if key == "faiss_row:0" else "vec_id_2"
+
+        client = TestClient(main.app)
+        response = client.post("/search", json={"vector": [0.1] * 384, "top_k": 2})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ids": ["vec_id_1", "vec_id_2"], "scores": [0.9, 0.8]})
+
+    @patch("main.faiss_index")
+    def test_search_faiss_dimension_mismatch(self, mock_faiss_index):
+        mock_faiss_index.d = 384
+
+        client = TestClient(main.app)
+        response = client.post("/search", json={"vector": [0.1] * 385, "top_k": 2})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Vector dimension", response.json()["detail"])
+
+    @patch("main.faiss_index")
+    def test_search_faiss_no_results(self, mock_faiss_index):
+        mock_faiss_index.d = 384
+        mock_faiss_index.search.return_value = (np.array([[]]), np.array([[-1]]))
+
+        client = TestClient(main.app)
+        response = client.post("/search", json={"vector": [0.1] * 384, "top_k": 2})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ids": [], "scores": []})
 
 
 if __name__ == "__main__":

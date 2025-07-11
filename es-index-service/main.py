@@ -130,10 +130,13 @@ async def es_kafka_worker():
                         "timestamp":     meta.get("timestamp"),
                     }
 
+                    # Ensure correct ID logic for chunked documents
+                    document_id = f"{data.get('doc_id')}_chunk_{data.get('chunk_id')}" if data.get("chunk_id") else data.get("doc_id")
+
                     action = {
                         "_op_type": "index",
                         "_index":   ES_INDEX,
-                        "_id":      data.get("chunk_id") or data.get("doc_id"),
+                        "_id":      document_id,
                         "_source":  doc
                     }
                     batch.append(action)

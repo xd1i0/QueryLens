@@ -188,7 +188,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - REBUILD_INTERVAL=10000
       - INDEX_DIM=384
-      - METRICS_PORT=8001
+      - METRICS_PORT=8003  # Updated metrics port
     depends_on:
       kafka:
         condition: service_healthy
@@ -198,13 +198,36 @@ services:
       - faiss_index_data:/data
     networks:
       - querylens-network
+    ports:
+      - "8001:8001"  # FastAPI port
+      - "8003:8003"  # Updated metrics port
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8001/metrics" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:8003/metrics" ]  # Updated healthcheck port
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  search-api:
+    build: ./search-api
+    container_name: qlens-search-api
+    ports:
+      - "8080:8080"
+    networks:
+      - querylens-network
+    restart: unless-stopped
+    depends_on:
+        - elasticsearch
+        - ingestion
+        - embedding
+        - faiss-index
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 
 volumes:
   esdata:

@@ -8,5 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
+ENV FASTAPI_PORT=8001
+ENV METRICS_PORT=8003
 
 CMD ["python", "main.py"]
