@@ -35,4 +35,3 @@ python -m pytest test_e2e.py -v --tb=short
 
 echo ""
 echo "All tests completed successfully!"
-echo "Security configuration tested for both HTTP and HTTPS connections."

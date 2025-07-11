@@ -185,6 +185,86 @@
         }
       ],
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+    },
+    {
+      "id": 9,
+      "title": "Failed Requests",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(failed_requests_total[5m])",
+          "legendFormat": "{{method}} {{endpoint}} ({{status_code}})",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Failures/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
+    },
+    {
+      "id": 10,
+      "title": "Cache Hits",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(cache_hits_total[5m])",
+          "legendFormat": "Cache Hits",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Hits/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 32}
+    },
+    {
+      "id": 11,
+      "title": "Cache Misses",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(cache_misses_total[5m])",
+          "legendFormat": "Cache Misses",
+          "refId": "A"
+        }
+      ],
+      "yAxes": [
+        {
+          "label": "Misses/sec",
+          "min": 0
+        },
+        {
+          "show": false
+        }
+      ],
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 32}
+    },
+    {
+      "id": 12,
+      "title": "Active Workers",
+      "type": "singlestat",
+      "targets": [
+        {
+          "expr": "active_workers",
+          "legendFormat": "Active Workers",
+          "refId": "A"
+        }
+      ],
+      "valueName": "current",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 40}
     }
   ],
   "time": {

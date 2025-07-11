@@ -1,23 +1,22 @@
 FROM python:3.10-slim
 
+# Install system dependencies for Tika and file handling
 RUN apt-get update && apt-get install -y \
+    openjdk-17-jre-headless \
     libmagic1 \
-    libmagic-dev \
-    antiword \
-    unrtf \
-    poppler-utils \
-    tesseract-ocr \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Copy only requirements first for better caching
 COPY src/requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy application code
 COPY src/ ./
-COPY auth/ /app/auth/
-
-RUN mkdir -p /app/certs
 
 ENV PYTHONPATH=/app
 

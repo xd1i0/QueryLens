@@ -1,0 +1,4 @@
+aiokafka>=0.8.1
+elasticsearch[async]==8.8.0
+tenacity>=8.2.2
+aiohttp
