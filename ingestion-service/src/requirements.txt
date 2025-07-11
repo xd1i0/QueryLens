@@ -7,12 +7,6 @@ python-multipart==0.0.20
 python-magic==0.4.27
 python-dotenv
 tenacity
-pytest
-pytest-asyncio
-httpx
-pytest-mock
-elasticsearch-dsl
-libmagic
 prometheus-client
 requests
 python-jose[cryptography]==3.3.0
@@ -20,3 +14,5 @@ passlib[bcrypt]==1.7.4
 pydantic[email]==2.5.0
 PyJWT==2.8.0
 bcrypt
+tika
+aiokafka

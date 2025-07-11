@@ -1,0 +1,6 @@
+faiss-cpu
+aiokafka
+redis
+prometheus_client
+tinyhttp
+numpy
