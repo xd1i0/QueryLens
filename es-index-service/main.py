@@ -120,8 +120,11 @@ async def es_kafka_worker():
                     data = json.loads(msg.value)
                     meta = data.get("metadata", {})
 
+                    # Use chunk_id directly as the document ID
+                    document_id = data.get("chunk_id") if data.get("chunk_id") is not None else data.get("doc_id")
+
                     doc = {
-                        "id":            data.get("doc_id"),
+                        "id":            document_id,  # Set the ID to chunk_id directly
                         "title":         meta.get("title"),
                         "content":       data.get("text"),
                         "tags":          meta.get("tags", []),
@@ -129,9 +132,6 @@ async def es_kafka_worker():
                         "source_system": meta.get("source_system"),
                         "timestamp":     meta.get("timestamp"),
                     }
-
-                    # Ensure correct ID logic for chunked documents
-                    document_id = f"{data.get('doc_id')}_chunk_{data.get('chunk_id')}" if data.get("chunk_id") else data.get("doc_id")
 
                     action = {
                         "_op_type": "index",
